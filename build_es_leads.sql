@@ -1,0 +1,47 @@
+CREATE OR REPLACE TABLE MODEL_DEV.RAW_MKTO.ES_LEADS CLONE MODEL_DEV.RAW_MKTO.LEADS_RAW;
+
+ALTER TABLE MODEL_DEV.RAW_MKTO.ES_LEADS ADD COLUMN
+  CREATED_AT TIMESTAMP_NTZ, LEAD_SCORE NUMBER(5,0), LIFECYCLE_STAGE VARCHAR,
+  JOB_TITLE VARCHAR, SENIORITY VARCHAR, DEPARTMENT VARCHAR, COMPANY VARCHAR,
+  INDUSTRY VARCHAR, COUNTRY VARCHAR, LEAD_SOURCE VARCHAR,
+  MARKETING_SUSPENDED BOOLEAN, EMAIL_INVALID BOOLEAN;
+
+UPDATE MODEL_DEV.RAW_MKTO.ES_LEADS SET
+  COMPANY = INITCAP(REPLACE(SPLIT_PART(SPLIT_PART(EMAIL,'@',2),'.',1),'-',' ')),
+  COUNTRY = CASE WHEN EMAIL ILIKE '%.au' THEN 'Australia' WHEN EMAIL ILIKE '%.uk' THEN 'United Kingdom'
+                 WHEN EMAIL ILIKE '%.ca' THEN 'Canada' WHEN EMAIL ILIKE '%.de' THEN 'Germany'
+                 WHEN EMAIL ILIKE '%.fr' THEN 'France' WHEN EMAIL ILIKE '%.in' THEN 'India'
+                 WHEN EMAIL ILIKE '%.nl' THEN 'Netherlands' WHEN EMAIL ILIKE '%.sg' THEN 'Singapore'
+                 ELSE 'United States' END,
+  INDUSTRY = CASE MOD(ABS(HASH(LEAD_ID,'ind')),8) WHEN 0 THEN 'SaaS' WHEN 1 THEN 'Fintech' WHEN 2 THEN 'Healthcare'
+                 WHEN 3 THEN 'Manufacturing' WHEN 4 THEN 'Retail' WHEN 5 THEN 'Media' WHEN 6 THEN 'Telecom'
+                 ELSE 'Professional Services' END,
+  LEAD_SOURCE = CASE MOD(ABS(HASH(LEAD_ID,'src')),6) WHEN 0 THEN 'Webinar' WHEN 1 THEN 'Content Download'
+                 WHEN 2 THEN 'Paid Search' WHEN 3 THEN 'Referral' WHEN 4 THEN 'Event' ELSE 'Organic' END,
+  JOB_TITLE = CASE MOD(ABS(HASH(LEAD_ID)),12) WHEN 0 THEN 'CMO' WHEN 1 THEN 'VP Marketing' WHEN 2 THEN 'Director of Demand Gen'
+                 WHEN 3 THEN 'Marketing Operations Manager' WHEN 4 THEN 'Content Marketing Manager' WHEN 5 THEN 'Growth Marketer'
+                 WHEN 6 THEN 'CTO' WHEN 7 THEN 'IT Director' WHEN 8 THEN 'VP Sales' WHEN 9 THEN 'Sales Operations Manager'
+                 WHEN 10 THEN 'CFO' ELSE 'Operations Manager' END,
+  SENIORITY = CASE MOD(ABS(HASH(LEAD_ID)),12) WHEN 0 THEN 'C-Level' WHEN 1 THEN 'VP' WHEN 2 THEN 'Director'
+                 WHEN 3 THEN 'Manager' WHEN 4 THEN 'Manager' WHEN 5 THEN 'IC' WHEN 6 THEN 'C-Level' WHEN 7 THEN 'Director'
+                 WHEN 8 THEN 'VP' WHEN 9 THEN 'Manager' WHEN 10 THEN 'C-Level' ELSE 'Manager' END,
+  DEPARTMENT = CASE MOD(ABS(HASH(LEAD_ID)),12) WHEN 6 THEN 'IT' WHEN 7 THEN 'IT' WHEN 8 THEN 'Sales' WHEN 9 THEN 'Sales'
+                 WHEN 10 THEN 'Finance' WHEN 11 THEN 'Operations' ELSE 'Marketing' END,
+  MARKETING_SUSPENDED = (MOD(ABS(HASH(LEAD_ID,'ms')),50)=0),
+  EMAIL_INVALID = (MOD(ABS(HASH(LEAD_ID,'ei')),100)=0);
+
+UPDATE MODEL_DEV.RAW_MKTO.ES_LEADS l SET
+  CREATED_AT = DATEADD('day', -(MOD(ABS(HASH(l.LEAD_ID)),120)+1), a.first_act),
+  LEAD_SCORE = LEAST(100, ROUND(8 + a.opens*2 + a.clicks*8)),
+  LIFECYCLE_STAGE = CASE WHEN MOD(ABS(HASH(l.LEAD_ID,'cust')),25)=0 AND a.clicks>=3 THEN 'Customer'
+                         WHEN a.clicks>=5 THEN 'Opportunity' WHEN a.clicks>=2 THEN 'SQL'
+                         WHEN a.clicks=1 OR a.opens>=2 THEN 'MQL' WHEN a.opens>0 THEN 'MQL' ELSE 'New' END
+FROM (SELECT LEAD_ID, MIN(ACTIVITY_DATE) first_act, COUNT_IF(ACTIVITY_TYPE_ID=10) opens, COUNT_IF(ACTIVITY_TYPE_ID=11) clicks
+      FROM MODEL_DEV.RAW_MKTO.ES_ACTIVITIES GROUP BY 1) a
+WHERE l.LEAD_ID = a.LEAD_ID;
+
+UPDATE MODEL_DEV.RAW_MKTO.ES_LEADS SET
+  CREATED_AT = DATEADD('day', -MOD(ABS(HASH(LEAD_ID)),700), '2026-05-30'::timestamp),
+  LEAD_SCORE = MOD(ABS(HASH(LEAD_ID,'ns')),8),
+  LIFECYCLE_STAGE = 'New'
+WHERE CREATED_AT IS NULL;
